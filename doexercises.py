@@ -30,7 +30,9 @@ args = parser.parse_args()
 
 
 class Log():
+
     """Static class which provides simple colored logging"""
+
     _colors = {
         "red": "\033[91m",
         "green": "\033[92m",
@@ -82,6 +84,7 @@ class Log():
 
 
 class Downloader(Thread):
+
     """A very basic multithreaded downloader for HTML files
     Attributes
     ----------
@@ -91,6 +94,7 @@ class Downloader(Thread):
     save_path : str
         The output file path
     """
+    
     def __init__(self, file_url, save_path):
         """
         Parameters
@@ -178,7 +182,7 @@ def fetch_rendered_files(filenames: List[str], outfolder: str) -> None:
                                  headers=headers, json=body)
         except requests.exceptions.RequestException as e:
             raise SystemExit(e)
-        res_path = resp.content.decode("UTF-8").splitlines()[8]
+        res_path = re.findall(r".*html", resp.content.decode("UTF-8"))[0]
         Downloader(root_url + res_path, outfolder + outfile).start()
 
 
