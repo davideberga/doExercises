@@ -2,12 +2,15 @@ import argparse
 import json
 import os
 import re
-import requests
+import sys
+import time
+import urllib
+from multiprocessing.pool import ThreadPool
 from shutil import copy2
 from threading import Thread
 from typing import Dict, List
-import urllib
-import time
+
+import requests
 
 root_url = 'http://datascience.maths.unitn.it'
 solutions_address = '/ocpu/library/doexercises/R/getSolutions'
@@ -26,13 +29,17 @@ parser.add_argument("-m", "--matricola",
                     help="numero di matricola", default="", type=str, nargs=1)
 parser.add_argument("-o", "--output", help="definisce cartella di output dei file HTML",
                     default="./html/", type=str, nargs=1)
+parser.add_argument("-v", "--verbose",
+                    help="aumenta verbosità dei log (stampa risposte del server etc)", action="store_true")
+parser.add_argument("-j", "--jobs",
+                    help="controlla il numero di thread usati per scaricare i file", default=4, nargs=1)
 args = parser.parse_args()
+
+pool = ThreadPool(args.jobs)
 
 
 class Log():
-
     """Static class which provides simple colored logging"""
-
     _colors = {
         "red": "\033[91m",
         "green": "\033[92m",
@@ -50,7 +57,7 @@ class Log():
         ----------
         text : str
             The text to be printed (should include format curly braces '{}')
-        
+
         args : str, optional
             The arguments to be passed to the str.format() function
         """
@@ -63,7 +70,7 @@ class Log():
         ----------
         text : str
             The text to be printed (should include format curly braces '{}')
-        
+
         args : str, optional
             The arguments to be passed to the str.format() function
         """
@@ -71,50 +78,29 @@ class Log():
 
     @staticmethod
     def success(text: str, args: str = "") -> None:
-        """Print and format an success message (green)
+        """Print and format a success message (green)
         Parameters
         ----------
         text : str
             The text to be printed (should include format curly braces '{}')
-        
+
         args : str, optional
             The arguments to be passed to the str.format() function
         """
         print(Log._colorize("[v] " + text.format(args), "green"))
 
-
-class Downloader(Thread):
-
-    """A very basic multithreaded downloader for HTML files
-    Attributes
-    ----------
-    file_url : str
-        The actual URL to be fetched
-    
-    save_path : str
-        The output file path
-    """
-    
-    def __init__(self, file_url, save_path):
-        """
+    @staticmethod
+    def debug(text: str, args: str = "") -> None:
+        """Print and format a debug message (indented)
         Parameters
         ----------
-        file_url : str
-            The actual URL to be fetched
-        
-        save_path : str
-            The output file path
-        """
-        super().__init__()
-        self.file_url = file_url
-        self.save_path = save_path
+        text : str
+            The text to be printed (should include format curly braces '{}')
 
-    def run(self):
+        args : str, optional
+            The arguments to be passed to the str.format() function
         """
-        Override for the Thread.run() function, defines the actual logic to 
-        be executed
-        """
-        urllib.request.urlretrieve(self.file_url, self.save_path)
+        print("\t " + text.strip().replace("\n", "\n\t").format(args))
 
 
 def login() -> str:
@@ -135,6 +121,8 @@ def login() -> str:
     except requests.exceptions.RequestException as e:
         raise SystemExit(e)
     Log.info("Logged in")
+    if args.verbose:
+        Log.debug(resp.content.decode("UTF-8"))
     return resp.content.decode("UTF-8").splitlines()[1]
 
 
@@ -156,6 +144,8 @@ def fetch_file_names(path: str) -> List[str]:
         raise SystemExit(e)
     filenames = resp.content.decode("UTF-8").split("$files")[1]
     Log.info("Got filenames")
+    if args.verbose:
+        Log.debug(resp.content.decode("UTF-8"))
     return re.findall(r"\"(.*\.Rmd)", filenames)
 
 
@@ -169,11 +159,11 @@ def fetch_rendered_files(filenames: List[str], outfolder: str) -> None:
     outfolder : str
         The folder in which to place the downloaded files
     """
-    Log.info("Found {} exercises", len(filenames))
-    for fn in filenames:
-        outfile = fn.replace(".Rmd", ".html")
+
+    def _fetch_file(filename: str) -> None:
+        outfile = filename.replace(".Rmd", ".html")
         body = {
-            "file": fn,
+            "file": filename,
             "output_file_name": outfile
         }
         Log.info("Downloading {}", outfile)
@@ -182,8 +172,15 @@ def fetch_rendered_files(filenames: List[str], outfolder: str) -> None:
                                  headers=headers, json=body)
         except requests.exceptions.RequestException as e:
             raise SystemExit(e)
-        res_path = re.findall(r".*html", resp.content.decode("UTF-8"))[0]
-        Downloader(root_url + res_path, outfolder + outfile).start()
+        res_path = re.findall(r".*html$", resp.content.decode("UTF-8"), re.MULTILINE)[0]
+        if args.verbose:
+            Log.debug("Found path: {}", res_path)
+        urllib.request.urlretrieve(root_url + res_path, outfolder + outfile)
+
+    if args.verbose:
+        Log.debug("Using {} threads", args.jobs)
+    pool.map(_fetch_file, filenames)
+    pool.close()
 
 
 if __name__ == "__main__":
@@ -193,11 +190,11 @@ if __name__ == "__main__":
             "This script needs valid DoExercises credentials. Use 'python {} --help' to get usage information",
             __file__.split("/")[-1]
         )
-        exit(1)
-    
+        sys.exit(1)
+
     path = login()
     filenames = fetch_file_names(path)
-    
+
     outfolder = args.output
     # Sanitize the output path: append a '/' if not present already
     if outfolder[-1] != "/":
@@ -210,8 +207,12 @@ if __name__ == "__main__":
     try:
         fetch_rendered_files(filenames, outfolder)
     except KeyboardInterrupt:
-        Log.error("Ending prematurely")
+        Log.error("Terminating prematurely")
+        Log.info("Finishing pending downloads")
         # Wait for all downloads to finish
-        time.sleep(1)
+        pool.terminate()
+        pool.join()
         sys.exit(1)
+
+    pool.join()
     Log.success("Finished downloading")
