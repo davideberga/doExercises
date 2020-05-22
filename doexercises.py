@@ -213,5 +213,5 @@ if __name__ == "__main__":
         Log.error("Ending prematurely")
         # Wait for all downloads to finish
         time.sleep(1)
-        os.exit(1)
+        sys.exit(1)
     Log.success("Finished downloading")
