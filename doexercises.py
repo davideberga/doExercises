@@ -27,15 +27,17 @@ parser.add_argument("-u", "--username",
                     help="username (nome.cognome)", default="", type=str, nargs=1)
 parser.add_argument("-m", "--matricola",
                     help="numero di matricola", default="", type=str, nargs=1)
+parser.add_argument("-f", "--force",
+                    help="salta il controllo dei file già scaricati e li ri-scarica tutti", action="store_true")
 parser.add_argument("-o", "--output", help="definisce cartella di output dei file HTML",
                     default="./html/", type=str, nargs=1)
 parser.add_argument("-v", "--verbose",
                     help="aumenta verbosità dei log (stampa risposte del server etc)", action="store_true")
 parser.add_argument("-j", "--jobs",
                     help="controlla il numero di thread usati per scaricare i file", default=4, nargs=1)
-args = parser.parse_args()
+cli_args = parser.parse_args()
 
-pool = ThreadPool(args.jobs)
+pool = ThreadPool(cli_args.jobs)
 
 
 class Log():
@@ -100,7 +102,8 @@ class Log():
         args : str, optional
             The arguments to be passed to the str.format() function
         """
-        print("\t " + text.strip().replace("\n", "\n\t").format(args))
+        if cli_args.verbose:
+            print("\t " + text.strip().replace("\n", "\n\t").format(args))
 
 
 def login() -> str:
@@ -111,8 +114,8 @@ def login() -> str:
         The URL where all filenames can be found (both .md and rendered .html)
     """
     body = {
-        "user": args.username,
-        "id": args.matricola
+        "user": cli_args.username,
+        "id": cli_args.matricola
     }
 
     try:
@@ -121,8 +124,7 @@ def login() -> str:
     except requests.exceptions.RequestException as e:
         raise SystemExit(e)
     Log.info("Logged in")
-    if args.verbose:
-        Log.debug(resp.content.decode("UTF-8"))
+    Log.debug(resp.content.decode("UTF-8"))
     return resp.content.decode("UTF-8").splitlines()[1]
 
 
@@ -144,8 +146,7 @@ def fetch_file_names(path: str) -> List[str]:
         raise SystemExit(e)
     filenames = resp.content.decode("UTF-8").split("$files")[1]
     Log.info("Got filenames")
-    if args.verbose:
-        Log.debug(resp.content.decode("UTF-8"))
+    Log.debug(resp.content.decode("UTF-8"))
     return re.findall(r"\"(.*\.Rmd)", filenames)
 
 
@@ -173,19 +174,39 @@ def fetch_rendered_files(filenames: List[str], outfolder: str) -> None:
         except requests.exceptions.RequestException as e:
             raise SystemExit(e)
         res_path = re.findall(r".*html$", resp.content.decode("UTF-8"), re.MULTILINE)[0]
-        if args.verbose:
-            Log.debug("Found path: {}", res_path)
+        Log.debug("Found path: {}", res_path)
         urllib.request.urlretrieve(root_url + res_path, outfolder + outfile)
 
-    if args.verbose:
-        Log.debug("Using {} threads", args.jobs)
+    Log.debug("Using {} threads", cli_args.jobs)
     pool.map(_fetch_file, filenames)
     pool.close()
 
 
+def check_existing_files(filenames: List[str], outfolder: str) -> List[str]:
+    """
+    Checks whether any files from a list of .Rmd files was already downloaded
+    in the ouput folder
+    Parameters
+    ----------
+    filenames : List[str]
+        A list of the filenames to look for on the output folder
+
+    outfolder : str
+        The folder in which downloaded files are placed
+    """
+    Log.info("Checking existing files")
+    ret = []
+    for fn in filenames:
+        fn_noext = fn.replace(".Rmd", ".html")
+        if os.path.isfile(outfolder + fn_noext): continue
+        ret.append(fn)
+
+    Log.debug("Skipping {} files", len(filenames) - len(ret))
+    return ret
+
 if __name__ == "__main__":
     # Check username and matricola
-    if args.username == "" or args.matricola == "":
+    if cli_args.username == "" or cli_args.matricola == "":
         Log.error(
             "This script needs valid DoExercises credentials. Use 'python {} --help' to get usage information",
             __file__.split("/")[-1]
@@ -193,9 +214,8 @@ if __name__ == "__main__":
         sys.exit(1)
 
     path = login()
-    filenames = fetch_file_names(path)
 
-    outfolder = args.output
+    outfolder = cli_args.output
     # Sanitize the output path: append a '/' if not present already
     if outfolder[-1] != "/":
         outfolder += "/"
@@ -203,6 +223,8 @@ if __name__ == "__main__":
     if not os.path.exists(outfolder):
         Log.info("Creating output folder")
         os.makedirs(outfolder)
+
+    filenames = check_existing_files(fetch_file_names(path), outfolder)
 
     try:
         fetch_rendered_files(filenames, outfolder)
