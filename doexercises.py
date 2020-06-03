@@ -186,7 +186,12 @@ def fetch_rendered_files(filenames: List[str], outfolder: str) -> None:
                                  headers=headers, json=body)
         except requests.exceptions.RequestException as e:
             raise SystemExit(e)
-        res_path = re.findall(r".*html$", resp.content.decode("UTF-8"), re.MULTILINE)[0]
+        res_path = ""
+        try:
+            res_path = re.findall(r".*html$", resp.content.decode("UTF-8"), re.MULTILINE)[0]
+        except IndexError as e:
+            Log.error("{} not downloaded, some server errors occured.", outfile)
+            Log.debug("Error: {}", e)
         Log.debug("Found path: {}", res_path)
         urllib.request.urlretrieve(URLS["root"] + res_path, outfolder + outfile)
 
