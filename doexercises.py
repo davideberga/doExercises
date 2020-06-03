@@ -190,8 +190,9 @@ def fetch_rendered_files(filenames: List[str], outfolder: str) -> None:
         try:
             res_path = re.findall(r".*html$", resp.content.decode("UTF-8"), re.MULTILINE)[0]
         except IndexError as e:
-            Log.error("{} not downloaded, some server errors occured.", outfile)
-            Log.debug("Error: {}", e)
+            Log.error("{} not downloaded, some server error occured.", outfile)
+            return
+
         Log.debug("Found path: {}", res_path)
         urllib.request.urlretrieve(URLS["root"] + res_path, outfolder + outfile)
 
@@ -338,17 +339,21 @@ def convert_to_pdf(htmlfolder: str, filenames: List[str], outfolder: str = "./pd
         The path of the `wkhtmltopdf` executable
     """
     def _convert_file_parallel(filename: str):
-        infile = filename.replace(".Rmd", ".html")
-        outfile = filename.replace(".Rmd", ".pdf")
+        infile = htmlfolder + filename.replace(".Rmd", ".html")
+        outfile = outfolder + filename.replace(".Rmd", ".pdf")
+        # Return if provided file path does not exist (also ignores symlinks)
+        if not os.path.exists(infile): return
         os.system(
-            "xvfb-run --auto-servernum --server-args='-screen 0, 1920x1080x24' {} --use-xserver --javascript-delay 4000 ./{} ./pdf/{}"
-                .format(cmd, htmlfolder + infile, outfile)
+            "xvfb-run --auto-servernum --server-args='-screen 0, 1920x1080x24' {} --use-xserver --javascript-delay 4000 ./{} ./{}"
+                .format(cmd, infile, outfile)
         )
 
     def _convert_file(filename: str):
-        infile = filename.replace(".Rmd", ".html")
-        outfile = filename.replace(".Rmd", ".pdf")
-        os.system("{} --javascript-delay 4000 ./{} ./pdf/{}".format(cmd, htmlfolder + infile, outfile))
+        infile = htmlfolder + filename.replace(".Rmd", ".html")
+        outfile = outfolder + filename.replace(".Rmd", ".pdf")
+        # Return if provided file path does not exist (also ignores symlinks)
+        if not os.path.exists(infile): return
+        os.system("{} --javascript-delay 4000 ./{} ./{}".format(cmd, infile, outfile))
 
     pool = ThreadPool(cli_args.jobs)
     Log.info("Converting {} files to PDF", len(filenames))
@@ -375,6 +380,24 @@ def convert_to_pdf(htmlfolder: str, filenames: List[str], outfolder: str = "./pd
     Log.success("Finished converting files to PDF")
 
 
+def _sanitize_dirpath(dirname: str) -> str:
+    """Sanitize a directory path: append a '/' if not present already
+    
+    Parameters
+    ----------
+    dirname : str
+        The path to be sanitized
+
+    Returns
+    -------
+    str
+        The sanitized directory path
+    """
+    if not dirname.endswith(os.path.sep):
+        return dirname + os.path.sep
+    return dirname
+
+
 if __name__ == "__main__":
     # Check username and matricola
     if cli_args.username == "" or cli_args.matricola == "":
@@ -386,10 +409,7 @@ if __name__ == "__main__":
 
     path = login()
 
-    html_outfolder = cli_args.htmlout
-    # Sanitize the output path: append a '/' if not present already
-    if html_outfolder[-1] != os.path.sep:
-        html_outfolder += os.path.sep
+    html_outfolder = _sanitize_dirpath(cli_args.htmlout)
     # Create the folder if it doesn't exist yet
     if not os.path.exists(html_outfolder):
         Log.info("Creating output folder")
@@ -410,10 +430,7 @@ if __name__ == "__main__":
     elif cli_args.nopdf:
         sys.exit(0)
     
-    pdf_outfolder = cli_args.pdfout
-    # Sanitize the output path: append a '/' if not present already
-    if pdf_outfolder[-1] != os.path.sep:
-        pdf_outfolder += os.path.sep
+    pdf_outfolder = _sanitize_dirpath(cli_args.pdfout)
     # Create the folder if it doesn't exist yet
     if not os.path.exists(pdf_outfolder):
         Log.info("Creating PDF output folder")
@@ -422,6 +439,6 @@ if __name__ == "__main__":
     convert_to_pdf(
         html_outfolder,
         check_existing_files(filenames, html_outfolder, ".pdf"),
-        cli_args.pdfout,
+        pdf_outfolder,
         cli_args.wk
     )
